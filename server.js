@@ -3,108 +3,118 @@ const proxy = require('express-http-proxy');
 const app = express();
 
 const PORT = process.env.PORT || 10000;
-const MAIN_DOMAIN = 'www.ouiheberg.com';
-const MANAGER_DOMAIN = 'manager.ouiheberg.com';
-const TARGET_PATH = '/en/free-minecraft-server';
+const RENDER_URL = 'pro-z9if.onrender.com';
 
-app.use('/', proxy((req) => {
-    // --- FIX 1: ROUTING AWARENESS ---
-    // If the path starts with /store, we MUST route to the manager domain.
-    if (
-        req.url.includes('manager') || 
-        req.url.startsWith('/store') || 
-        req.url.startsWith('/clientarea') ||
-        req.headers.referer?.includes('manager') ||
-        req.headers.referer?.includes('/store')
-    ) {
-        return `https://${MANAGER_DOMAIN}`;
-    }
-    return `https://${MAIN_DOMAIN}`;
-}, {
-    proxyReqPathResolver: (req) => (req.url === '/' ? TARGET_PATH : req.url),
-
+// Shared logic for both proxies
+const createProxyOptions = (targetDomain) => ({
+    proxyReqPathResolver: (req) => {
+        // 1. If hitting the absolute root of the main site, go to the Minecraft page
+        if (targetDomain === 'www.ouiheberg.com' && req.originalUrl === '/') {
+            return '/en/free-minecraft-server';
+        }
+        // 2. FIX FOR 404: Use originalUrl so the /store/ prefix is preserved when sent to the backend
+        return req.originalUrl; 
+    },
+    
     proxyReqOptDecorator: function(proxyReqOpts, srcReq) {
-        delete proxyReqOpts.headers['accept-encoding'];
-        
-        const isManager = srcReq.url.includes('manager') || srcReq.url.startsWith('/store');
-        const currentTarget = isManager ? MANAGER_DOMAIN : MAIN_DOMAIN;
-        
-        proxyReqOpts.headers['host'] = currentTarget;
+        delete proxyReqOpts.headers['accept-encoding']; // Crucial to prevent gibberish
+        proxyReqOpts.headers['host'] = targetDomain;
+        proxyReqOpts.headers['origin'] = `https://${targetDomain}`;
+        proxyReqOpts.headers['referer'] = `https://${targetDomain}${srcReq.originalUrl}`;
         return proxyReqOpts;
     },
 
     userResDecorator: function(proxyRes, proxyResData, userReq, userRes) {
         const contentType = proxyRes.headers['content-type'];
-        const myHost = userReq.get('host');
 
         if (contentType && contentType.includes('text/html')) {
             let content = proxyResData.toString('utf8');
 
-            // Strip hardcoded domain URLs
-            const domainRegex = new RegExp(`https?:(\\/|\\\\\\/)+((www|manager)\\.)?ouiheberg\\.com`, 'gi');
-            content = content.replace(domainRegex, `https://${myHost}`);
+            // --- HTML STRING REPLACEMENTS ---
+            // Nuke all target="_blank" from orbit in the raw string
+            content = content.replace(/target=["']_blank["']/gi, 'target="_self"');
+            
+            // Hard replace standard domains with your Render URL
+            content = content.replace(/https?:\/\/(www\.|manager\.)?ouiheberg\.com/gi, `https://${RENDER_URL}`);
+            
+            // Hard replace JSON-escaped domains (React/Next.js data blocks)
+            content = content.replace(/https?:\\\/\\\/manager\.ouiheberg\.com/gi, `https://${RENDER_URL}`);
+            content = content.replace(/https?:\\\/\\\/www\.ouiheberg\.com/gi, `https://${RENDER_URL}`);
 
-            // --- FIX 2: DIRECT INPUT OVERLAY & REACT KILLER ---
-            const injection = `
+            // Fix relative static assets
+            content = content.replace(/(href|src)="(\/|_next|static|assets|en|fr)/g, `$1="https://${RENDER_URL}/$2`);
+
+            // --- THE HEAD INJECTION ---
+            // Injected into <head> so it runs BEFORE React gets a chance to initialize
+            const headInjection = `
+            <base target="_self">
             <script>
                 (function() {
-                    // A. THE REACT KILLER
-                    // The 'true' at the end makes this run in the Capture Phase, 
-                    // meaning it intercepts the click BEFORE React's internal routing sees it.
-                    document.addEventListener('click', function(e) {
+                    // Override native window.open
+                    window.open = function(url, name, features) {
+                        const safeUrl = url.replace(/https?:\\/\\/.*ouiheberg\\.com/gi, 'https://${RENDER_URL}');
+                        window.location.href = safeUrl;
+                        return null;
+                    };
+
+                    // Catch ALL mouse interactions before React can trigger its router
+                    function killEscapes(e) {
                         const target = e.target.closest('a');
-                        if (target) {
-                            const href = target.getAttribute('href') || '';
-                            // If they click the stubborn link...
-                            if (href.includes('hebergement-minecraft-ryzen') || href.includes('freemc')) {
-                                e.preventDefault();     // Stop new tab
-                                e.stopPropagation();    // Kill React's event listener entirely
-                                
-                                // Force navigation locally
-                                window.location.href = '/store/hebergement-minecraft-ryzen/freemc';
+                        if (target && target.href) {
+                            if (target.href.includes('hebergement-minecraft-ryzen') || target.href.includes('ouiheberg')) {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                const safeUrl = target.href.replace(/https?:\\/\\/.*ouiheberg\\.com/gi, 'https://${RENDER_URL}');
+                                window.location.href = safeUrl;
                             }
                         }
-                    }, true);
-
-                    // B. THE DIRECT INPUT UI
-                    // A floating box in the bottom right corner to manually force navigation
-                    window.addEventListener('load', function() {
-                        const floater = document.createElement('div');
-                        floater.style.cssText = 'position:fixed;bottom:20px;right:20px;background:#111;border:2px solid #444;padding:15px;z-index:2147483647;border-radius:8px;box-shadow:0 10px 30px rgba(0,0,0,0.8);display:flex;flex-direction:column;gap:10px;font-family:sans-serif;';
-                        floater.innerHTML = \`
-                            <label style="color:#fff;font-size:12px;font-weight:bold;">Direct Proxy Navigator:</label>
-                            <div style="display:flex;gap:5px;">
-                                <input type="text" id="proxy-direct-url" value="/store/hebergement-minecraft-ryzen/freemc" style="padding:8px;width:300px;background:#222;color:#fff;border:1px solid #555;border-radius:4px;">
-                                <button onclick="window.location.href = document.getElementById('proxy-direct-url').value" style="padding:8px 15px;background:#007bff;color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:bold;">Go</button>
-                            </div>
-                        \`;
-                        document.body.appendChild(floater);
-                    });
+                    }
+                    
+                    document.addEventListener('click', killEscapes, true);
+                    document.addEventListener('mousedown', killEscapes, true); // Catch React fast-clicks
+                    document.addEventListener('mouseup', killEscapes, true);
                 })();
             </script>`;
             
-            content = content.replace('</body>', `${injection}</body>`);
+            // Inject right after the <head> tag opens
+            content = content.replace(/<head[^>]*>/i, `$&${headInjection}`);
+
             return content;
         }
         return proxyResData;
     },
 
-    userResHeaderDecorator(headers, userReq) {
-        const myHost = userReq.get('host');
+    userResHeaderDecorator(headers) {
         delete headers['content-security-policy'];
         delete headers['x-frame-options'];
 
         if (headers.location) {
-            headers.location = headers.location.replace(/https?:\/\/(www\\.|manager\\.)?ouiheberg\\.com/gi, `https://${myHost}`);
+            headers.location = headers.location.replace(/https?:\/\/(www\.|manager\.)?ouiheberg\.com/gi, `https://${RENDER_URL}`);
         }
         
         if (headers['set-cookie']) {
             headers['set-cookie'] = headers['set-cookie'].map(c => 
-                c.replace(/domain=\.?ouiheberg\.com/gi, `domain=${myHost}`)
+                c.replace(/domain=\.?ouiheberg\.com/gi, `domain=${RENDER_URL}`)
             );
         }
         return headers;
     }
-}));
+});
+
+// --- THE ROUTING FIX ---
+// Explicitly map paths to their specific subdomains so they never 404
+
+const managerProxy = proxy('https://manager.ouiheberg.com', createProxyOptions('manager.ouiheberg.com'));
+const mainProxy = proxy('https://www.ouiheberg.com', createProxyOptions('www.ouiheberg.com'));
+
+// 1. Send all Manager/WHMCS paths directly to the manager subdomain
+app.use('/store', managerProxy);
+app.use('/clientarea', managerProxy);
+app.use('/cart', managerProxy);
+app.use('/login', managerProxy);
+app.use('/assets', managerProxy); // Just in case CSS comes from here
+
+// 2. Send everything else to the main website
+app.use('/', mainProxy);
 
 app.listen(PORT, () => console.log(`Proxy active on port ${PORT}`));
