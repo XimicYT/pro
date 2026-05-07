@@ -3,93 +3,69 @@ const proxy = require('express-http-proxy');
 const app = express();
 
 const PORT = process.env.PORT || 10000;
-const MAIN_TARGET = 'seedloaf.com';
+const TARGET_DOMAIN = 'www.ouiheberg.com';
 
-app.use('/', proxy((req) => {
-    // 1. Silent Tunnel Resolver
-    if (req.url.startsWith('/s/')) {
-        const parts = req.url.split('/s/')[1];
-        try {
-            const targetUrl = parts.startsWith('http') ? parts : `https://${parts}`;
-            return new URL(targetUrl).origin;
-        } catch (e) { return `https://${MAIN_TARGET}`; }
-    }
-    // 2. Auth Subdomain Routing
-    if (req.url.includes('sign-up') || req.url.includes('sign-in') || req.url.includes('clerk') || req.url.includes('accounts')) {
-        return `https://accounts.${MAIN_TARGET}`;
-    }
-    return `https://${MAIN_TARGET}`;
-}, {
-    proxyReqOptDecorator: function(proxyReqOpts) {
+app.use('/', proxy(`https://${TARGET_DOMAIN}`, {
+    proxyReqOptDecorator: function(proxyReqOpts, srcReq) {
+        // 1. STRIP COMPRESSION: Essential to avoid "cursed symbols"
         delete proxyReqOpts.headers['accept-encoding'];
-        proxyReqOpts.headers['referer'] = `https://${MAIN_TARGET}/`;
-        proxyReqOpts.headers['origin'] = `https://${MAIN_TARGET}`;
+        
+        // 2. SPOOF HEADERS: Make the request look like it's coming from the real site
+        proxyReqOpts.headers['referer'] = `https://${TARGET_DOMAIN}/en`;
+        proxyReqOpts.headers['origin'] = `https://${TARGET_DOMAIN}`;
+        proxyReqOpts.headers['host'] = TARGET_DOMAIN;
+        
         return proxyReqOpts;
-    },
-
-    proxyReqPathResolver: function (req) {
-        if (req.url.startsWith('/s/')) {
-            const parts = req.url.split('/s/')[1];
-            try {
-                const urlObj = new URL(parts.startsWith('http') ? parts : `https://${parts}`);
-                return urlObj.pathname + urlObj.search;
-            } catch (e) { return req.url; }
-        }
-        return req.url;
     },
 
     userResDecorator: function(proxyRes, proxyResData, userReq, userRes) {
         const contentType = proxyRes.headers['content-type'];
         const myHost = userReq.get('host');
 
+        // Only process HTML files
         if (contentType && contentType.includes('text/html')) {
             let content = proxyResData.toString('utf8');
             
-            // Rewrite all https links to use our /s/ tunnel
-            const linkPattern = /(https?:\/\/)(?!.*onrender\.com)([a-zA-Z0-9-._~:/?#[\]@!$&'()*+,;=]+)/g;
-            content = content.replace(linkPattern, `https://${myHost}/s/$1$2`);
+            // 3. HIJACK ALL LINKS: Convert all ouiheberg.com links to your Render URL
+            const pattern = new RegExp(`(https?:)?//${TARGET_DOMAIN.replace('.', '\\.')}`, 'gi');
+            content = content.replace(pattern, `https://${myHost}`);
 
-            // CLERK FIX: Inject a "Soft Spoof" that doesn't crash the browser
-            // We tell Clerk its "frontendApi" and "proxyUrl" are YOUR host.
-            const clerkFix = `
-                <script>
-                    window.__CLERK_FRONTEND_API__ = "${myHost}";
-                    window.__CLERK_PROXY_URL__ = "https://${myHost}";
-                    
-                    // Prevent Clerk from redirecting away if it feels "lost"
-                    const originalPush = window.history.pushState;
-                    window.history.pushState = function() {
-                        if (arguments[2] && arguments[2].includes('${MAIN_TARGET}')) {
-                            arguments[2] = arguments[2].replace(/https?:\\/\\/.*?${MAIN_TARGET}/, '');
-                        }
-                        return originalPush.apply(window.history, arguments);
-                    };
-                </script>
-            `;
-            return content.replace('<head>', '<head>' + clerkFix);
+            // 4. FIX ASSET PATHS: Ensure local scripts/CSS load correctly
+            // Some sites use relative paths that might break
+            content = content.replace(/src="\/([a-zA-Z0-9])/g, `src="https://${myHost}/$1`);
+            content = content.replace(/href="\/([a-zA-Z0-9])/g, `href="https://${myHost}/$1`);
+
+            return content;
         }
         return proxyResData;
     },
 
     userResHeaderDecorator(headers, userReq) {
         const myHost = userReq.get('host');
+        
+        // 5. REMOVE SECURITY BLOCKS: Delete CSP/X-Frame to fix the blank screen
         delete headers['content-security-policy'];
         delete headers['content-security-policy-report-only'];
         delete headers['x-frame-options'];
+        delete headers['strict-transport-security'];
 
+        // 6. FIX REDIRECTS & COOKIES
         if (headers.location) {
-            headers.location = headers.location.replace(/(https?:\/\/)([a-zA-Z0-9-._~]+)/gi, `https://${myHost}/s/$1$2`);
+            headers.location = headers.location.replace(new RegExp(`https?://${TARGET_DOMAIN}`, 'gi'), `https://${myHost}`);
         }
         
         if (headers['set-cookie']) {
-            headers['set-cookie'] = headers['set-cookie'].map(c => c.replace(/domain=\.?seedloaf\.com/gi, `domain=${myHost}`));
+            headers['set-cookie'] = headers['set-cookie'].map(c => 
+                c.replace(new RegExp(`domain=\.?${TARGET_DOMAIN.replace('www.', '')}`, 'gi'), `domain=${myHost}`)
+            );
         }
         return headers;
     },
 
-    changeOrigin: true
+    changeOrigin: true,
+    preserveHostHdr: false
 }));
 
 app.listen(PORT, () => {
-    console.log(`Clerk-Bypass Proxy active on port ${PORT}`);
+    console.log(`OuiHeberg Mirror active on port ${PORT}`);
 });
