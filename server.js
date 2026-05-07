@@ -8,30 +8,18 @@ const MANAGER_DOMAIN = 'manager.ouiheberg.com';
 const TARGET_PATH = '/en/free-minecraft-server';
 
 app.use('/', proxy((req) => {
-    // DYNAMIC TARGET: If path starts with /manager-api or similar, switch target
-    // Or simply check if the URL contains manager-specific strings
-    if (req.url.includes('manager')) {
+    // Route traffic based on URL content
+    if (req.url.includes('manager') || req.headers.referer?.includes('manager')) {
         return `https://${MANAGER_DOMAIN}`;
     }
     return `https://${MAIN_DOMAIN}`;
 }, {
-    proxyReqPathResolver: function (req) {
-        // 1. Root redirect to Free Minecraft page
-        let resolvedPath = req.url === '/' ? TARGET_PATH : req.url;
-        
-        // 2. Clean up manager paths if you're using a prefix like /manager/...
-        return resolvedPath;
-    },
+    proxyReqPathResolver: (req) => (req.url === '/' ? TARGET_PATH : req.url),
 
     proxyReqOptDecorator: function(proxyReqOpts, srcReq) {
         delete proxyReqOpts.headers['accept-encoding'];
-        
         const currentTarget = srcReq.url.includes('manager') ? MANAGER_DOMAIN : MAIN_DOMAIN;
-        
-        proxyReqOpts.headers['referer'] = `https://${currentTarget}`;
-        proxyReqOpts.headers['origin'] = `https://${currentTarget}`;
         proxyReqOpts.headers['host'] = currentTarget;
-        
         return proxyReqOpts;
     },
 
@@ -41,23 +29,42 @@ app.use('/', proxy((req) => {
 
         if (contentType && contentType.includes('text/html')) {
             let content = proxyResData.toString('utf8');
+
+            // 1. Rewrite hardcoded URLs in the HTML
+            const domainRegex = new RegExp(`https?://(www\\.|manager\\.)?ouiheberg\\.com`, 'gi');
+            content = content.replace(domainRegex, `https://${myHost}`);
+
+            // 2. Fix relative paths for assets
+            content = content.replace(/(href|src)="\/(_next|static|assets|en|fr)/g, `$1="https://${myHost}/$2`);
+
+            // 3. THE "MAGIC" SCRIPT INJECTION
+            // This script runs on the client side to catch dynamic links
+            const injection = `
+            <script>
+                (function() {
+                    // Force all clicks to stay on the proxy
+                    document.addEventListener('click', function(e) {
+                        const target = e.target.closest('a');
+                        if (target && target.href) {
+                            // If the link points to the real site, rewrite it to the proxy
+                            if (target.href.includes('ouiheberg.com')) {
+                                target.href = target.href.replace(/https?:\/\/(www\\.|manager\\.)?ouiheberg\\.com/gi, window.location.origin);
+                            }
+                            // Force same-tab opening
+                            target.setAttribute('target', '_self');
+                        }
+                    }, true);
+
+                    // Optional: Intercept History API (for Next.js routing)
+                    const originalPushState = history.pushState;
+                    history.pushState = function() {
+                        arguments[2] = arguments[2].replace(/https?:\/\/(www\\.|manager\\.)?ouiheberg\\.com/gi, window.location.origin);
+                        return originalPushState.apply(history, arguments);
+                    };
+                })();
+            </script>`;
             
-            // --- FIX 1: FORCE LINKS TO STAY IN SAME TAB ---
-            // Removes target="_blank" and replaces it with target="_self"
-            content = content.replace(/target="_blank"/gi, 'target="_self"');
-
-            // --- FIX 2: SUBDOMAIN REWRITING ---
-            // Rewrite MAIN domain links
-            const mainPattern = new RegExp(`(https?:)?//${MAIN_DOMAIN.replace('.', '\\.')}`, 'gi');
-            content = content.replace(mainPattern, `https://${myHost}`);
-
-            // Rewrite MANAGER domain links
-            const managerPattern = new RegExp(`(https?:)?//${MANAGER_DOMAIN.replace('.', '\\.')}`, 'gi');
-            content = content.replace(managerPattern, `https://${myHost}`);
-
-            // Fix for "Static Assets" (CSS/JS)
-            content = content.replace(/href="\/(_next|static|assets)/g, `href="https://${myHost}/$1`);
-            content = content.replace(/src="\/(_next|static|assets)/g, `src="https://${myHost}/$1`);
+            content = content.replace('</body>', `${injection}</body>`);
 
             return content;
         }
@@ -66,19 +73,13 @@ app.use('/', proxy((req) => {
 
     userResHeaderDecorator(headers, userReq) {
         const myHost = userReq.get('host');
-        
         delete headers['content-security-policy'];
-        delete headers['content-security-policy-report-only'];
         delete headers['x-frame-options'];
 
-        // Rewrite Location headers for redirects
         if (headers.location) {
-            headers.location = headers.location
-                .replace(new RegExp(`https?://${MAIN_DOMAIN}`, 'gi'), `https://${myHost}`)
-                .replace(new RegExp(`https?://${MANAGER_DOMAIN}`, 'gi'), `https://${myHost}`);
+            headers.location = headers.location.replace(/https?:\/\/(www\\.|manager\\.)?ouiheberg\\.com/gi, `https://${myHost}`);
         }
         
-        // Rewrite Cookie Domains
         if (headers['set-cookie']) {
             headers['set-cookie'] = headers['set-cookie'].map(c => 
                 c.replace(/domain=\.?ouiheberg\.com/gi, `domain=${myHost}`)
@@ -88,6 +89,4 @@ app.use('/', proxy((req) => {
     }
 }));
 
-app.listen(PORT, () => {
-    console.log(`Proxy active on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Proxy active on port ${PORT}`));
