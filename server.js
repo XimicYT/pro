@@ -6,43 +6,48 @@ const PORT = process.env.PORT || 10000;
 const MAIN_TARGET = 'seedloaf.com';
 
 app.use('/', proxy((req) => {
-    // DYNAMIC TARGET RESOLUTION:
-    // If the path starts with /sign-up or /login, route to the accounts subdomain
-    if (req.url.startsWith('/sign-up') || req.url.startsWith('/login')) {
+    // If the request is for /sign-up or /login, automatically target the accounts subdomain
+    if (req.url.includes('sign-up') || req.url.includes('login') || req.url.includes('auth')) {
         return `https://accounts.${MAIN_TARGET}`;
     }
     return `https://${MAIN_TARGET}`;
 }, {
-    proxyReqOptDecorator: function(proxyReqOpts, srcReq) {
-        // Strip compression to avoid "cursed symbols"
+    // 1. STRIP COMPRESSION: Stops the "cursed symbols" by forcing plain text
+    proxyReqOptDecorator: function(proxyReqOpts) {
         delete proxyReqOpts.headers['accept-encoding'];
+        // Fake the referer so Seedloaf thinks the request is coming from their own site
+        proxyReqOpts.headers['referer'] = `https://${MAIN_TARGET}/`;
         return proxyReqOpts;
     },
 
     decompress: true,
 
+    // 2. REWRITE LINKS: Catch every possible seedloaf subdomain
     userResDecorator: function(proxyRes, proxyResData, userReq, userRes) {
         const contentType = proxyRes.headers['content-type'];
-        const myHost = userReq.get('host');
-
         if (contentType && contentType.includes('text/html')) {
             let content = proxyResData.toString('utf8');
-            
-            // Replaces ALL seedloaf variants (subdomains and main) with your host
-            // Example: accounts.seedloaf.com -> ://onrender.com
+            const myHost = userReq.get('host');
+
+            // This regex catches: seedloaf.com, accounts.seedloaf.com, and others
             const pattern = new RegExp(`(https?:)?//([a-z0-9]+\\.)?${MAIN_TARGET.replace('.', '\\.')}`, 'g');
-            const modifiedContent = content.replace(pattern, `https://${myHost}`);
-            
-            return modifiedContent;
+            return content.replace(pattern, `https://${myHost}`);
         }
         return proxyResData;
     },
 
+    // 3. FIX REDIRECTS: Ensure logins don't bounce you back to the real site
     userResHeaderDecorator(headers, userReq, userRes, proxyRes, proxyReq) {
         if (headers.location) {
             const myHost = userReq.get('host');
-            // Fix redirects from ANY seedloaf subdomain back to your proxy host
-            headers.location = headers.location.replace(new RegExp(`https?://([a-z0-9]+\\.)?${MAIN_TARGET.replace('.', '\\.')}`, 'g'), `https://${myHost}`);
+            const pattern = new RegExp(`https?://([a-z0-9]+\\.)?${MAIN_TARGET.replace('.', '\\.')}`, 'g');
+            headers.location = headers.location.replace(pattern, `https://${myHost}`);
+        }
+        // Fix Cookies: Ensures your browser accepts their login cookies
+        if (headers['set-cookie']) {
+            headers['set-cookie'] = headers['set-cookie'].map(cookie => 
+                cookie.replace(/domain=\.?seedloaf\.com/gi, `domain=${userReq.get('host')}`)
+            );
         }
         return headers;
     },
@@ -52,5 +57,5 @@ app.use('/', proxy((req) => {
 }));
 
 app.listen(PORT, () => {
-    console.log(`Subdomain-aware Proxy active on port ${PORT}`);
+    console.log(`Subdomain-Fixed Proxy active on port ${PORT}`);
 });
