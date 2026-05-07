@@ -6,26 +6,36 @@ const PORT = process.env.PORT || 10000;
 const TARGET_URL = 'seedloaf.com';
 
 app.use('/', proxy(`https://${TARGET_URL}`, {
-    // 1. This tells the library to handle the HTTPS handshake automatically
-    proxyReqOptDecorator: function(proxyReqOpts, srcReq) {
-        // We don't need to manually set protocol here anymore
+    // 1. CRITICAL: This tells the proxy to unzip the "cursed text" 
+    // so we can actually read and edit the HTML.
+    proxyReqOptDecorator: function(proxyReqOpts) {
         return proxyReqOpts;
     },
+    
+    // We must decompress to edit the text
+    decompress: true,
 
-    // 2. Intercept and rewrite HTML content to keep links on our proxy
+    // 2. Intercept and rewrite HTML content
     userResDecorator: function(proxyRes, proxyResData, userReq, userRes) {
-        let content = proxyResData.toString('utf8');
+        const contentType = proxyRes.headers['content-type'];
         const myHost = userReq.get('host');
-        
-        // This replaces "https://seedloaf.com" with "https://your-app.onrender.com"
-        // It also handles cases where the site uses "//seedloaf.com" (protocol-relative)
-        const pattern = new RegExp(`(https:)?//${TARGET_URL}`, 'g');
-        const modifiedContent = content.replace(pattern, `https://${myHost}`);
-        
-        return modifiedContent;
+
+        // Only rewrite if the content is HTML (don't touch images/binaries)
+        if (contentType && contentType.includes('text/html')) {
+            let content = proxyResData.toString('utf8');
+            
+            // Rewrite all links from seedloaf.com to your Render URL
+            const pattern = new RegExp(`(https:)?//${TARGET_URL}`, 'g');
+            const modifiedContent = content.replace(pattern, `https://${myHost}`);
+            
+            return modifiedContent;
+        }
+
+        // If it's an image or other file, just return it as is
+        return proxyResData;
     },
 
-    // 3. Catch redirects (like after a login) and point them back to the proxy
+    // 3. Handle Redirects (e.g., after logging in)
     proxyResDecorator: function(proxyRes, proxyResData, userReq, userRes) {
         if (proxyRes.headers.location) {
             let redirect = proxyRes.headers.location;
@@ -36,11 +46,10 @@ app.use('/', proxy(`https://${TARGET_URL}`, {
         return proxyResData;
     },
 
-    // Important for modern sites
     changeOrigin: true,
     preserveHostHdr: false
 }));
 
 app.listen(PORT, () => {
-    console.log(`Proxy active on port ${PORT}`);
+    console.log(`Decompressed Proxy active on port ${PORT}`);
 });
