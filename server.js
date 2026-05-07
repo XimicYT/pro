@@ -4,16 +4,17 @@ const app = express();
 
 const PORT = process.env.PORT || 10000;
 const MAIN_TARGET = 'seedloaf.com';
+const ACCOUNTS_TARGET = `accounts.${MAIN_TARGET}`;
 
 app.use('/', proxy((req) => {
-    // Dynamically target the correct subdomain
-    if (req.url.includes('sign-up') || req.url.includes('sign-in') || req.url.includes('clerk') || req.url.includes('accounts')) {
-        return `https://accounts.${MAIN_TARGET}`;
+    // If the URL looks like an auth/sign-up path, route specifically to the accounts subdomain
+    if (req.url.includes('sign-up') || req.url.includes('sign-in') || req.url.includes('clerk')) {
+        return `https://${ACCOUNTS_TARGET}`;
     }
     return `https://${MAIN_TARGET}`;
 }, {
     proxyReqOptDecorator: function(proxyReqOpts) {
-        delete proxyReqOpts.headers['accept-encoding']; // Stop cursed symbols
+        delete proxyReqOpts.headers['accept-encoding']; // Fixes "cursed text"
         proxyReqOpts.headers['referer'] = `https://${MAIN_TARGET}/`;
         proxyReqOpts.headers['origin'] = `https://${MAIN_TARGET}`;
         return proxyReqOpts;
@@ -26,48 +27,39 @@ app.use('/', proxy((req) => {
         if (contentType && contentType.includes('text/html')) {
             let content = proxyResData.toString('utf8');
             
-            // 1. Rewrite all seedloaf domains to your proxy domain
+            // Rewrite ALL variants (seedloaf.com and ://seedloaf.com) to your Render URL
             const pattern = new RegExp(`(https?:)?//([a-z0-9]+\\.)?${MAIN_TARGET.replace('.', '\\.')}`, 'gi');
             content = content.replace(pattern, `https://${myHost}`);
 
-            // 2. Inject a fix for Clerk/JS frameworks that check window.location
-            const scriptShield = `
-                <script>
-                    // Spoof the location so JS frameworks don't realize they are proxied
-                    const originalLocation = window.location.host;
-                    Object.defineProperty(window, 'location', {
-                        value: { ...window.location, host: '${MAIN_TARGET}', hostname: '${MAIN_TARGET}' },
-                        writable: true
-                    });
-                </script>
-            `;
-            return content.replace('<head>', '<head>' + scriptShield);
+            // Fix for Clerk's internal Frontend API calls
+            const apiPattern = new RegExp(`clerk\\.${MAIN_TARGET.replace('.', '\\.')}`, 'gi');
+            content = content.replace(apiPattern, myHost);
+
+            return content;
         }
         return proxyResData;
     },
 
-    userResHeaderDecorator(headers, userReq, userRes) {
+    userResHeaderDecorator(headers, userReq) {
         const myHost = userReq.get('host');
 
-        // CRITICAL: Remove security headers that cause blank screens
+        // STRIP SECURITY: Removes the "Blank Screen" blocks (CSP)
         delete headers['content-security-policy'];
         delete headers['content-security-policy-report-only'];
         delete headers['x-frame-options'];
 
-        // Fix Redirects
+        // Fix Redirects from subdomains
         if (headers.location) {
             const pattern = new RegExp(`https?://([a-z0-9]+\\.)?${MAIN_TARGET.replace('.', '\\.')}`, 'gi');
             headers.location = headers.location.replace(pattern, `https://${myHost}`);
         }
 
-        // Fix Cookies for Authentication
+        // Rewrite Cookie Domains so your browser stores the login session
         if (headers['set-cookie']) {
             headers['set-cookie'] = headers['set-cookie'].map(cookie => 
                 cookie.replace(/domain=\.?seedloaf\.com/gi, `domain=${myHost}`)
-                      .replace(/Secure/gi, '') // Allow testing on non-https if needed
             );
         }
-
         return headers;
     },
 
@@ -76,5 +68,5 @@ app.use('/', proxy((req) => {
 }));
 
 app.listen(PORT, () => {
-    console.log(`Bypass active on port ${PORT}. Security headers stripped.`);
+    console.log(`Subdomain-aware proxy active on port ${PORT}`);
 });
