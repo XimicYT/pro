@@ -1,28 +1,21 @@
 const express = require('express');
 const { createProxyMiddleware } = require('http-proxy-middleware');
-const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// 1. Serve your local index.html file at the root
-app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'index.html'));
-});
-
-// 2. Proxy logic for everything else
-// This will forward requests to seedloaf.com
-app.use('/proxy', createProxyMiddleware({
+// This catches EVERYTHING and sends it to Seedloaf
+app.use('/', createProxyMiddleware({
     target: 'https://seedloaf.com',
-    changeOrigin: true,
-    pathRewrite: {
-        '^/proxy': '', // removes /proxy from the URL when forwarding
-    },
+    changeOrigin: true, // Necessary to fool the target server into thinking the request is local
     onProxyRes: function (proxyRes, req, res) {
+        // Fixes potential CORS issues
         proxyRes.headers['Access-Control-Allow-Origin'] = '*';
-    }
+    },
+    // This helps handle SSL/HTTPS redirects properly
+    followRedirects: true
 }));
 
 app.listen(PORT, () => {
-    console.log(`Proxy server running on port ${PORT}`);
+    console.log(`Proxy active on port ${PORT}`);
 });
