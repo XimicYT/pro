@@ -1,0 +1,13 @@
+{
+  "name": "seedloaf-proxy",
+  "version": "1.0.0",
+  "description": "A simple proxy for seedloaf.com",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "http-proxy-middleware": "^2.0.6"
+  }
+}
