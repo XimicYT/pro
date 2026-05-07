@@ -6,7 +6,12 @@ const PORT = process.env.PORT || 10000;
 const MAIN_TARGET = 'seedloaf.com';
 
 app.use('/', proxy((req) => {
-    // Force sign-in/up paths to hit the correct accounts subdomain
+    // If the path contains a full URL (like from our wildcard rewriter), use that instead
+    if (req.url.startsWith('/proxy-h/')) {
+        return req.url.split('/proxy-h/')[1];
+    }
+    
+    // Default routing
     if (req.url.includes('sign-up') || req.url.includes('sign-in') || req.url.includes('clerk')) {
         return `https://accounts.${MAIN_TARGET}`;
     }
@@ -26,61 +31,37 @@ app.use('/', proxy((req) => {
         if (contentType && contentType.includes('text/html')) {
             let content = proxyResData.toString('utf8');
             
-            // 1. Rewrite all seedloaf variants to your proxy URL
-            const pattern = new RegExp(`(https?:)?//([a-z0-9]+\\.)?${MAIN_TARGET.replace('.', '\\.')}`, 'gi');
-            content = content.replace(pattern, `https://${myHost}`);
+            // FIX 1: Remove the broken 'redefine property: location' script
+            // FIX 2: Wildcard Link Hijacking
+            // This turns ANY https link (even external ones) into a proxied link
+            // Example: https://setuptrust.com -> https://your-render-url/proxy-h/https://setuptrust.com
+            const linkPattern = /(https?:\/\/)(?!.*onrender\.com)([a-zA-Z0-9-._~:/?#[\]@!$&'()*+,;=]+)/g;
+            content = content.replace(linkPattern, `https://${myHost}/proxy-h/$1$2`);
 
-            // 2. Inject Debug Alerts and Spoofing
-            const debugScript = `
-                <script>
-                    // Alert any JS errors immediately
-                    window.onerror = function(msg, url, line) {
-                        alert("JS ERROR: " + msg + "\\nURL: " + url + "\\nLine: " + line);
-                    };
-                    
-                    // Alert if Clerk or major scripts fail to load
-                    window.addEventListener('error', function(e) {
-                        if (e.target.tagName === 'SCRIPT') {
-                            alert("FAILED TO LOAD SCRIPT: " + e.target.src);
-                        }
-                    }, true);
-
-                    // Spoof location for Clerk's internal checks
-                    Object.defineProperty(window, 'location', {
-                        value: { ...window.location, host: '${MAIN_TARGET}', hostname: '${MAIN_TARGET}' },
-                        writable: true
-                    });
-                    
-                    console.log("Debug Proxy Script Active");
-                </script>
-            `;
-            return content.replace('<head>', '<head>' + debugScript);
+            return content;
         }
         return proxyResData;
     },
 
     userResHeaderDecorator(headers, userReq) {
         const myHost = userReq.get('host');
-
-        // CRITICAL: Strip the "Blank Screen" security blocks
         delete headers['content-security-policy'];
         delete headers['content-security-policy-report-only'];
         delete headers['x-frame-options'];
 
-        // Fix Cookies and Redirects
         if (headers.location) {
-            headers.location = headers.location.replace(new RegExp(`https?://([a-z0-9]+\\.)?${MAIN_TARGET.replace('.', '\\.')}`, 'gi'), `https://${myHost}`);
+            headers.location = headers.location.replace(/(https?:\/\/)([a-zA-Z0-9-._~]+)/gi, `https://${myHost}/proxy-h/$1$2`);
         }
+        
         if (headers['set-cookie']) {
             headers['set-cookie'] = headers['set-cookie'].map(c => c.replace(/domain=\.?seedloaf\.com/gi, `domain=${myHost}`));
         }
         return headers;
     },
 
-    changeOrigin: true,
-    preserveHostHdr: false
+    changeOrigin: true
 }));
 
 app.listen(PORT, () => {
-    console.log(`Debug Proxy active on port ${PORT}`);
+    console.log(`Wildcard Proxy active on port ${PORT}`);
 });
