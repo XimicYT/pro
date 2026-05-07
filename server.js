@@ -3,23 +3,34 @@ const proxy = require('express-http-proxy');
 const app = express();
 
 const PORT = process.env.PORT || 10000;
-const TARGET_DOMAIN = 'www.ouiheberg.com';
+const MAIN_DOMAIN = 'www.ouiheberg.com';
+const MANAGER_DOMAIN = 'manager.ouiheberg.com';
 const TARGET_PATH = '/en/free-minecraft-server';
 
-app.use('/', proxy(`https://${TARGET_DOMAIN}`, {
-    // 1. Force the proxy to start at the Free Minecraft page if the user hits the root
+app.use('/', proxy((req) => {
+    // DYNAMIC TARGET: If path starts with /manager-api or similar, switch target
+    // Or simply check if the URL contains manager-specific strings
+    if (req.url.includes('manager')) {
+        return `https://${MANAGER_DOMAIN}`;
+    }
+    return `https://${MAIN_DOMAIN}`;
+}, {
     proxyReqPathResolver: function (req) {
-        return req.url === '/' ? TARGET_PATH : req.url;
+        // 1. Root redirect to Free Minecraft page
+        let resolvedPath = req.url === '/' ? TARGET_PATH : req.url;
+        
+        // 2. Clean up manager paths if you're using a prefix like /manager/...
+        return resolvedPath;
     },
 
     proxyReqOptDecorator: function(proxyReqOpts, srcReq) {
-        // Strip compression to avoid "cursed symbols"
         delete proxyReqOpts.headers['accept-encoding'];
         
-        // Make the request look like it's coming from the real site
-        proxyReqOpts.headers['referer'] = `https://${TARGET_DOMAIN}${TARGET_PATH}`;
-        proxyReqOpts.headers['origin'] = `https://${TARGET_DOMAIN}`;
-        proxyReqOpts.headers['host'] = TARGET_DOMAIN;
+        const currentTarget = srcReq.url.includes('manager') ? MANAGER_DOMAIN : MAIN_DOMAIN;
+        
+        proxyReqOpts.headers['referer'] = `https://${currentTarget}`;
+        proxyReqOpts.headers['origin'] = `https://${currentTarget}`;
+        proxyReqOpts.headers['host'] = currentTarget;
         
         return proxyReqOpts;
     },
@@ -31,13 +42,22 @@ app.use('/', proxy(`https://${TARGET_DOMAIN}`, {
         if (contentType && contentType.includes('text/html')) {
             let content = proxyResData.toString('utf8');
             
-            // Rewrite all OuiHeberg links to your Render URL
-            const pattern = new RegExp(`(https?:)?//${TARGET_DOMAIN.replace('.', '\\.')}`, 'gi');
-            content = content.replace(pattern, `https://${myHost}`);
+            // --- FIX 1: FORCE LINKS TO STAY IN SAME TAB ---
+            // Removes target="_blank" and replaces it with target="_self"
+            content = content.replace(/target="_blank"/gi, 'target="_self"');
 
-            // Fix for "Static Assets" (CSS/JS) that use relative paths
-            content = content.replace(/href="\/_next/g, `href="https://${myHost}/_next`);
-            content = content.replace(/src="\/_next/g, `src="https://${myHost}/_next`);
+            // --- FIX 2: SUBDOMAIN REWRITING ---
+            // Rewrite MAIN domain links
+            const mainPattern = new RegExp(`(https?:)?//${MAIN_DOMAIN.replace('.', '\\.')}`, 'gi');
+            content = content.replace(mainPattern, `https://${myHost}`);
+
+            // Rewrite MANAGER domain links
+            const managerPattern = new RegExp(`(https?:)?//${MANAGER_DOMAIN.replace('.', '\\.')}`, 'gi');
+            content = content.replace(managerPattern, `https://${myHost}`);
+
+            // Fix for "Static Assets" (CSS/JS)
+            content = content.replace(/href="\/(_next|static|assets)/g, `href="https://${myHost}/$1`);
+            content = content.replace(/src="\/(_next|static|assets)/g, `src="https://${myHost}/$1`);
 
             return content;
         }
@@ -47,27 +67,27 @@ app.use('/', proxy(`https://${TARGET_DOMAIN}`, {
     userResHeaderDecorator(headers, userReq) {
         const myHost = userReq.get('host');
         
-        // Strip security headers that cause the blank screen
         delete headers['content-security-policy'];
         delete headers['content-security-policy-report-only'];
         delete headers['x-frame-options'];
 
+        // Rewrite Location headers for redirects
         if (headers.location) {
-            headers.location = headers.location.replace(new RegExp(`https?://${TARGET_DOMAIN}`, 'gi'), `https://${myHost}`);
+            headers.location = headers.location
+                .replace(new RegExp(`https?://${MAIN_DOMAIN}`, 'gi'), `https://${myHost}`)
+                .replace(new RegExp(`https?://${MANAGER_DOMAIN}`, 'gi'), `https://${myHost}`);
         }
         
+        // Rewrite Cookie Domains
         if (headers['set-cookie']) {
             headers['set-cookie'] = headers['set-cookie'].map(c => 
-                c.replace(new RegExp(`domain=\.?${TARGET_DOMAIN.replace('www.', '')}`, 'gi'), `domain=${myHost}`)
+                c.replace(/domain=\.?ouiheberg\.com/gi, `domain=${myHost}`)
             );
         }
         return headers;
-    },
-
-    changeOrigin: true,
-    preserveHostHdr: false
+    }
 }));
 
 app.listen(PORT, () => {
-    console.log(`OuiHeberg Minecraft Proxy active on port ${PORT}`);
+    console.log(`Proxy active on port ${PORT}`);
 });
