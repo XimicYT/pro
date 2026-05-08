@@ -1,11 +1,12 @@
-FROM amazoncorretto:8-al2-full
+# Upgrade to Java 17 to support the Eaglercraft plugin
+FROM amazoncorretto:17-al2-full
 
 RUN yum install -y wget && yum clean all
 
 WORKDIR /server
 
-# Download from your private Netlify mirror
-RUN wget -O paper-1.12.2.jar "https://zippy-kitsune-232a22.netlify.app/paper-1.12.2.jar"
+# Download the engine from your Netlify mirror
+RUN wget -O paper-1.12.2.jar "https://netlify.app"
 
 COPY . .
 
@@ -14,5 +15,5 @@ RUN echo "eula=true" > eula.txt
 
 EXPOSE 10000
 
-# Optimized for 512MB RAM
+# Optimized Startup (Keeping 400M to avoid Render RAM crashes)
 CMD ["java", "-Xmx400M", "-Xms400M", "-jar", "paper-1.12.2.jar", "nogui"]
