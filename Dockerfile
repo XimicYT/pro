@@ -1,26 +1,22 @@
 FROM openjdk:8-jre-slim
 
-# Install necessary tools
+# Install wget to download the heavy files
 RUN apt-get update && apt-get install -y wget && rm -rf /var/lib/apt/lists/*
 
-# Create server directory
 WORKDIR /server
 
-# Download the files from the repo manually since we aren't forking
-RUN wget https://github.com
-RUN wget https://github.com
-RUN wget https://github.com
+# 1. Download the heavy Paper 1.12.2 JAR directly from a mirror
+RUN wget -O paper-1.12.2.jar https://github.com
 
-# Copy plugins folder (if you want the default ones)
-RUN mkdir plugins
-RUN wget -P plugins/ https://github.com
+# 2. Copy your small local files (run.sh and plugins)
+COPY . .
 
-# Setup Permissions
+# 3. Setup permissions and EULA
 RUN chmod +x run.sh
 RUN echo "eula=true" > eula.txt
 
-# Render uses a dynamic port; Eaglercraft usually needs 25565
-EXPOSE 25565
+# 4. Standard port for Render Web Services
+EXPOSE 10000
 
-# Start the server with low RAM settings for Render Free Tier
+# 5. Optimized Startup (Critical for Render's 512MB limit)
 CMD ["java", "-Xmx400M", "-Xms400M", "-jar", "paper-1.12.2.jar", "nogui"]
