@@ -1,21 +1,19 @@
 FROM amazoncorretto:17-al2-full
 
-RUN yum install -y wget && yum clean all
+RUN yum install -y wget curl zip unzip && yum clean all
 WORKDIR /server
 
-# 1. Download Paper 1.12.2 (Build 1620 is the stable final for 1.12.2)
+# Download Paper 1.12.2
 RUN wget -O paper-1.12.2.jar https://api.papermc.io/v2/projects/paper/versions/1.12.2/builds/1620/downloads/paper-1.12.2-1620.jar
 
-# 2. Pre-accept EULA
-RUN echo "eula=true" > eula.txt
-
-# 3. Copy your local files (plugins folder, world folder, server.properties)
+# Copy your scripts and config
 COPY . .
 
-# 4. Fix permissions
-RUN chmod +x run.sh
+# Set up environment variables for the run script
+# (You will set these in the Render Dashboard, not here!)
+RUN chmod +x run.sh sync.sh
+RUN echo "eula=true" > eula.txt
 
-# Render looks for traffic on 10000
 EXPOSE 10000
 
 CMD ["./run.sh"]
