@@ -1,19 +1,21 @@
-# Upgrade to Java 17 to support the Eaglercraft plugin
 FROM amazoncorretto:17-al2-full
 
 RUN yum install -y wget && yum clean all
-
 WORKDIR /server
 
-# Download the engine from your Netlify mirror
-RUN wget -O paper-1.12.2.jar "https://netlify.app"
+# 1. Download Paper 1.12.2 (Build 1620 is the stable final for 1.12.2)
+RUN wget -O paper-1.12.2.jar https://api.papermc.io/v2/projects/paper/versions/1.12.2/builds/1620/downloads/paper-1.12.2-1620.jar
 
-COPY . .
-
-RUN chmod +x run.sh
+# 2. Pre-accept EULA
 RUN echo "eula=true" > eula.txt
 
+# 3. Copy your local files (plugins folder, world folder, server.properties)
+COPY . .
+
+# 4. Fix permissions
+RUN chmod +x run.sh
+
+# Render looks for traffic on 10000
 EXPOSE 10000
 
-# Optimized Startup (Keeping 400M to avoid Render RAM crashes)
-CMD ["java", "-Xmx400M", "-Xms400M", "-jar", "paper-1.12.2.jar", "nogui"]
+CMD ["./run.sh"]
