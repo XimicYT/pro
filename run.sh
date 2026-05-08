@@ -1,17 +1,13 @@
 #!/bin/bash
 
-# 1. Pull the latest world from Supabase
+# Only try to download if the file exists on Supabase to avoid unzip errors
 ./sync.sh download
 
-# 2. Start the Minecraft Server
-# We use a trap to catch when Render shuts down the service
-trap './sync.sh upload; exit' SIGTERM
-
-java -Xmx400M -Xms400M -jar paper-1.12.2.jar nogui &
+# Optimization: -XX:MaxDirectMemorySize limits buffer overhead
+# -XX:+UseSerialGC is actually BETTER for very small RAM (under 1GB)
+java -Xmx350M -Xms350M -XX:+UseSerialGC -Dfile.encoding=UTF-8 -jar paper-1.12.2.jar nogui &
 JAVA_PID=$!
 
-# Wait for the process
+trap './sync.sh upload; kill $JAVA_PID' SIGTERM
 wait $JAVA_PID
-
-# 3. Upload when the server stops naturally
 ./sync.sh upload
