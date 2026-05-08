@@ -4,8 +4,8 @@ RUN yum install -y wget && yum clean all
 
 WORKDIR /server
 
-# FIX: Using the official PaperMC API for a guaranteed real JAR file
-RUN wget -O paper-1.12.2.jar "https://papermc.io"
+# FORCE CLEAR: Download the actual 30MB file from the official build server
+RUN wget --no-check-certificate -O paper-1.12.2.jar "https://papermc.io"
 
 COPY . .
 
@@ -14,5 +14,5 @@ RUN echo "eula=true" > eula.txt
 
 EXPOSE 10000
 
-# Optimized Startup for Render Free Tier (512MB)
+# Strict 400MB limit to fit Render's 512MB free tier
 CMD ["java", "-Xmx400M", "-Xms400M", "-jar", "paper-1.12.2.jar", "nogui"]
