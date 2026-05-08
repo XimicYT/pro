@@ -4,8 +4,8 @@ RUN yum install -y wget && yum clean all
 
 WORKDIR /server
 
-# FORCE CLEAR: Download the actual 30MB file from the official build server
-RUN wget --no-check-certificate -O paper-1.12.2.jar "https://papermc.io"
+# Download from your private Netlify mirror
+RUN wget -O paper-1.12.2.jar "https://zippy-kitsune-232a22.netlify.app/paper-1.12.2.jar"
 
 COPY . .
 
@@ -14,5 +14,5 @@ RUN echo "eula=true" > eula.txt
 
 EXPOSE 10000
 
-# Strict 400MB limit to fit Render's 512MB free tier
+# Optimized for 512MB RAM
 CMD ["java", "-Xmx400M", "-Xms400M", "-jar", "paper-1.12.2.jar", "nogui"]
