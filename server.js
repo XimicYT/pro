@@ -5,125 +5,109 @@ const app = express();
 const PORT = process.env.PORT || 10000;
 const RENDER_URL = 'pro-z9if.onrender.com';
 
-// Helper to determine which upstream domain to use
-const getTarget = (req) => {
-    const path = req.originalUrl || req.url;
-    // 1. Handle the tracking/click domain
-    if (path.startsWith('/click/')) {
-        return 'https://link.ouiheberg.com';
+// 1. HELPER: Extract target from the request
+const getTargetInfo = (req) => {
+    const rawPath = req.url.slice(1); // Remove leading slash
+    
+    // Check if the path looks like a full URL
+    if (rawPath.startsWith('http')) {
+        try {
+            const url = new URL(rawPath);
+            return {
+                protocol: url.protocol,
+                host: url.host,
+                path: url.pathname + url.search,
+                base: `${url.protocol}//${url.host}`
+            };
+        } catch (e) {
+            // Fallback if URL parsing fails
+        }
     }
-    // 2. Handle the billing/manager domain
-    if (path.includes('manager') || path.startsWith('/store') || path.startsWith('/clientarea') || path.startsWith('/cart') || path.startsWith('/index.php?rp=')) {
-        return 'https://manager.ouiheberg.com';
-    }
-    // 3. Default to the main site
-    return 'https://www.ouiheberg.com';
+    
+    // Default fallback to OuiHeberg if no valid URL is in the path
+    return {
+        protocol: 'https:',
+        host: 'www.ouiheberg.com',
+        path: req.url === '/' ? '/en/free-minecraft-server' : req.url,
+        base: 'https://www.ouiheberg.com'
+    };
 };
 
-app.use('/', proxy(
-    getTarget, 
-    {
-        proxyReqPathResolver: (req) => {
-            const path = req.originalUrl || req.url;
-            if (path === '/') return '/en/free-minecraft-server';
-            return path; 
-        },
+app.use('/', (req, res, next) => {
+    const info = getTargetInfo(req);
+    
+    return proxy(info.base, {
+        proxyReqPathResolver: () => info.path,
         
-        proxyReqOptDecorator: function(proxyReqOpts, srcReq) {
+        proxyReqOptDecorator: (proxyReqOpts, srcReq) => {
             proxyReqOpts.headers['accept-encoding'] = 'identity';
-            
-            // Dynamically set the Host header based on the target we are hitting
-            const targetUrl = getTarget(srcReq);
-            const targetDomain = targetUrl.replace('https://', '');
-            
-            proxyReqOpts.headers['host'] = targetDomain;
-            proxyReqOpts.headers['origin'] = `https://${targetDomain}`;
-            proxyReqOpts.headers['referer'] = `https://${targetDomain}${srcReq.url}`;
-            
+            proxyReqOpts.headers['host'] = info.host;
+            proxyReqOpts.headers['origin'] = info.base;
+            proxyReqOpts.headers['referer'] = info.base;
             return proxyReqOpts;
         },
 
-        userResDecorator: function(proxyRes, proxyResData, userReq, userRes) {
-            const contentType = proxyRes.headers['content-type'];
-
-            if (contentType && contentType.includes('text/html')) {
+        userResDecorator: (proxyRes, proxyResData, userReq, userRes) => {
+            const contentType = proxyRes.headers['content-type'] || '';
+            if (contentType.includes('text/html') || contentType.includes('application/javascript')) {
                 let content = proxyResData.toString('utf8');
 
-                // Broadened Regex to catch 'link.', 'manager.', and 'www.'
-                const domainRegex = /https?:\/\/(www\.|manager\.|link\.)?ouiheberg\.com/gi;
-                content = content.replace(domainRegex, `https://${RENDER_URL}`);
-                
-                // Handle escaped slashes often found in JSON/JS responses
-                const escapedRegex = /https?:\\\/\\\/(www\.|manager\.|link\.)?ouiheberg\.com/gi;
-                content = content.replace(escapedRegex, `https://${RENDER_URL}`);
+                // REWRITE LOGIC: Find any absolute URL pointing to the target and point it to US
+                // This handles the "ANY link" requirement
+                const targetRegex = new RegExp(`https?://${info.host.replace(/\./g, '\\.')}`, 'gi');
+                content = content.replace(targetRegex, `https://${RENDER_URL}`);
 
-                const zombieInjection = `
-                <script>
-                    (function() {
-                        const PROXY_URL = 'https://${RENDER_URL}';
-
-                        // Intercept window.open
-                        const oldOpen = window.open;
-                        window.open = function(url) {
-                            if (typeof url === 'string') {
-                                url = url.replace(/https?:\/\/(www\.|manager\.|link\.)?ouiheberg\.com/gi, PROXY_URL);
-                            }
-                            return oldOpen.call(window, url);
-                        };
-
-                        // Global link interceptor
-                        document.addEventListener('click', function(e) {
-                            const target = e.target.closest('a');
-                            if (target && target.href) {
-                                if (target.href.includes('ouiheberg.com')) {
-                                    // Let the natural navigation happen, but ensure the URL is rewritten
-                                    target.href = target.href.replace(/https?:\/\/(www\.|manager\.|link\.)?ouiheberg\.com/gi, PROXY_URL);
+                // ZOMBIE SCRIPT: Universal version
+                if (contentType.includes('text/html')) {
+                    const zombieInjection = `
+                    <script>
+                        (function() {
+                            const MY_PROXY = 'https://${RENDER_URL}/';
+                            
+                            // Intercept all clicks globally
+                            document.addEventListener('click', e => {
+                                const a = e.target.closest('a');
+                                if (a && a.href && !a.href.startsWith(window.location.origin)) {
+                                    e.preventDefault();
+                                    // Append the destination to our proxy URL
+                                    window.location.href = MY_PROXY + a.href;
                                 }
-                            }
-                        }, true);
+                            }, true);
 
-                        function ensureUI() {
-                            if (!document.getElementById('super-debug-console')) {
-                                const debugUI = document.createElement('div');
-                                debugUI.id = 'super-debug-console';
-                                debugUI.style.cssText = 'position:fixed;bottom:20px;right:20px;background:#111;padding:15px;z-index:2147483647;border:2px solid #0f0;border-radius:5px;display:flex;flex-direction:column;gap:10px;';
-                                debugUI.innerHTML = \`
-                                    <label style="color:#0f0;font-family:monospace;font-size:14px;font-weight:bold;">Manual Proxy Router</label>
-                                    <div style="display:flex;gap:5px;">
-                                        <input type="text" id="emergency-url" value="/store/hebergement-minecraft-ryzen/freemc" style="width:250px;background:#222;color:#fff;border:1px solid #555;padding:5px;">
-                                        <button onclick="window.location.href = document.getElementById('emergency-url').value" style="background:#0f0;color:#000;border:none;padding:5px 10px;cursor:pointer;font-weight:bold;">GO</button>
-                                    </div>
-                                \`;
-                                document.documentElement.appendChild(debugUI);
+                            // Keep the UI Overlay
+                            function ensureUI() {
+                                if (document.getElementById('proxy-ui')) return;
+                                const div = document.createElement('div');
+                                div.id = 'proxy-ui';
+                                div.style.cssText = 'position:fixed;top:10px;left:10px;z-index:2147483647;background:#000;color:#0f0;padding:10px;border:1px solid #0f0;font-family:monospace;';
+                                div.innerHTML = 'Proxy Active: ' + window.location.pathname;
+                                document.documentElement.appendChild(div);
                             }
-                        }
-                        setInterval(ensureUI, 1000);
-                    })();
-                </script>`;
-                
-                return content + zombieInjection;
+                            setInterval(ensureUI, 1000);
+                        })();
+                    </script>`;
+                    return content + zombieInjection;
+                }
+                return content;
             }
             return proxyResData;
         },
 
-        userResHeaderDecorator(headers) {
+        userResHeaderDecorator: (headers) => {
             delete headers['content-security-policy'];
             delete headers['x-frame-options'];
-
-            // Rewrite Location headers for redirects (Crucial for the 'link' subdomain)
+            
             if (headers.location) {
-                headers.location = headers.location.replace(/https?:\/\/(www\.|manager\.|link\.)?ouiheberg\.com/gi, `https://${RENDER_URL}`);
+                // If the server tries to redirect, we wrap that redirect in our proxy URL
+                headers.location = `https://${RENDER_URL}/${headers.location}`;
             }
             
-            // Cookie Domain Stripping: Making cookies "host-only" so they work on Render
             if (headers['set-cookie']) {
-                headers['set-cookie'] = headers['set-cookie'].map(c => 
-                    c.replace(/domain=\.?ouiheberg\.com/gi, '') 
-                );
+                headers['set-cookie'] = headers['set-cookie'].map(c => c.replace(/domain=[^;]+/i, ''));
             }
             return headers;
         }
-    }
-));
+    })(req, res, next);
+});
 
-app.listen(PORT, () => console.log(`Proxy active on port ${PORT}`));
+app.listen(PORT, () => console.log(`Universal Proxy on port ${PORT}`));
