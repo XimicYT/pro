@@ -1,3 +1,3 @@
 #!/bin/sh
-# Render free tier limit is 512MB. We give Java 400MB to leave room for the OS.
+# 400M allows room for the Java Virtual Machine overhead
 java -Xmx400M -Xms400M -jar paper-1.12.2.jar nogui
